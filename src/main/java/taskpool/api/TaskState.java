@@ -1,9 +1,6 @@
 package taskpool.api;
 
-import javafx.scene.paint.Stop;
 import zdf.common.api.IBaseEnum;
-
-import java.util.concurrent.CancellationException;
 
 
 /**
@@ -54,6 +51,7 @@ public class TaskState <T>{
         FINISH("FINISH","finish"),
         INTERRUPT("INTERRUPT","interrupted"),
         STOP("STOP","stopped manual"),
+        ERROR("ERROR","error, the process thrown an exception")
         ;
 
         private String code;

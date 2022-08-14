@@ -14,7 +14,7 @@ public class TaskFactory {
             }
 
             @Override
-            public ApiResponse<T> process() {
+            public T process() {
                 return iProcess.process();
             }
 

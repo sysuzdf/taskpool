@@ -33,7 +33,7 @@ public abstract class DefaultTask<T> implements ITask<T> {
     }
 
     @Override
-    public TaskState getState() {
+    public TaskState getTaskState() {
         return taskState;
     }
 
@@ -42,7 +42,7 @@ public abstract class DefaultTask<T> implements ITask<T> {
     public abstract ApiResponse<Void> stop();
 
     @Override
-    public abstract ApiResponse<T> process();
+    public abstract T process();
 
     @Override
     public int getPriority() {

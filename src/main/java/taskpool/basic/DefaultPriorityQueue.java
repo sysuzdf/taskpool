@@ -21,15 +21,11 @@ public class DefaultPriorityQueue implements IQueue {
     private String id;
     private int concurrentLimit;
 
-    private PriorityBlockingQueue<Runnable> queue;
-
-    private PriorityBlockingQueue<Runnable> exeQueue;
-
-    private ThreadPoolExecutor pool;
+    private PriorityBlockingQueue<Callable> queue;
 
     private Map<String,ITask> taskMap=new ConcurrentHashMap<>();
 
-    private Map<String,Future> futureMap=new ConcurrentHashMap<>();
+    private Map<String,FutureTask> futureMap=new ConcurrentHashMap<>();
 
     private Thread submitThread;
 
@@ -39,19 +35,10 @@ public class DefaultPriorityQueue implements IQueue {
 
     private int used=0;
 
-    public DefaultPriorityQueue(String id,int concurrentLimit,int corePoolSize,int maximumPoolSize,long keepAliveTime){
+    public DefaultPriorityQueue(String id,int concurrentLimit){
         this.id=id;
         this.concurrentLimit=concurrentLimit;
-        queue=new PriorityBlockingQueue<Runnable>();
-        exeQueue=new PriorityBlockingQueue<Runnable>();
-
-        pool=new ThreadPoolExecutor(corePoolSize,maximumPoolSize,keepAliveTime, TimeUnit.MILLISECONDS,
-                exeQueue){
-            @Override
-            protected RunnableFuture newTaskFor(Runnable runnable,Object value){
-                return new InnerFutureTask((InnerRunner) runnable,value);
-            }
-        };
+        queue=new PriorityBlockingQueue<>();
         takeFromQueue =queueLock.newCondition();
         submitThread=new Thread(new Runnable() {
             @Override
@@ -68,8 +55,11 @@ public class DefaultPriorityQueue implements IQueue {
                     }
                     try {
                         InnerRunner runner = (InnerRunner) queue.take();
-                        Future future = pool.submit(runner);
-                        futureMap.put(runner.getTask().getId(), future);
+                        FutureTask task=new FutureTask(runner);
+                        Thread taskThread=new Thread(task,
+                                "["+DefaultPriorityQueue.this.id+"]["+runner.getTask().getId()+"]");
+                        taskThread.start();
+                        futureMap.put(runner.getTask().getId(), task);
                         used = used + 1;
                     } catch (InterruptedException e) {
                         logger.error("submitThread queue.take interrupted. but continue", e);
@@ -83,33 +73,11 @@ public class DefaultPriorityQueue implements IQueue {
         submitThread.start();
     }
 
-    private class InnerFutureTask extends FutureTask implements Comparable<InnerFutureTask>{
-
-        private InnerRunner runner;
-        public InnerFutureTask(InnerRunner runnable, Object result) {
-            super(runnable, result);
-            this.runner=runnable;
-        }
-
-        @Override
-        public int compareTo(InnerFutureTask o) {
-            return runner.compareTo(o.runner);
-        }
-
-        public InnerRunner getRunner(){
-            return runner;
-        }
-    }
-
-    private class InnerRunner implements Runnable,Comparable<InnerRunner>{
+    private class InnerRunner implements Callable<TaskState>,Comparable<InnerRunner>{
 
         private ITask task;
 
-
-
         private int priority=0;
-
-
 
         private String createTimeStamp;
 
@@ -146,16 +114,20 @@ public class DefaultPriorityQueue implements IQueue {
 
 
         @Override
-        public void run() {
+        public TaskState call() {
             LogTool.beginTrace("["+id+"]["+task.getId()+"]");
+            TaskState taskState=task.getTaskState();
             try {
-                TaskState taskState=task.getState();
                 taskState.setState(TaskState.State.RUNNING);
-                ApiResponse resp = task.process();
+                Object result = task.process();
                 taskState.setState(TaskState.State.FINISH);
-                taskState.setResult(resp.getBody());
+                taskState.setResult(result);
+                return taskState;
             }catch(Exception ex){
                 logger.error("[{}][{}] process error",id,task.getId(),ex);
+                taskState.setState(TaskState.State.ERROR);
+                taskState.setException(ex);
+                return taskState;
             }finally {
                 finishTask(task.getId());
                 LogTool.endTrace();
@@ -219,7 +191,7 @@ public class DefaultPriorityQueue implements IQueue {
         queueLock.lock();
         try {
             InnerRunner runner = new InnerRunner(task);
-            task.getState().setState(TaskState.State.WAITING);
+            task.getTaskState().setState(TaskState.State.WAITING);
             queue.put(runner);
             takeFromQueue.signalAll();
         }finally {
@@ -236,6 +208,7 @@ public class DefaultPriorityQueue implements IQueue {
             }
         }
         ITask task=taskMap.get(taskId);
+        task.getTaskState().setState(TaskState.State.STOP);
         try {
             ApiResponse<Void> resp = task.stop();
             return resp;
@@ -300,7 +273,7 @@ public class DefaultPriorityQueue implements IQueue {
         //get the actual order in the queue
         queueLock.lock();
         try {
-            PriorityBlockingQueue<Runnable> tmpQueue=new PriorityBlockingQueue<>();
+            PriorityBlockingQueue<Callable> tmpQueue=new PriorityBlockingQueue<>();
             //retrieve from the queue and re-oder in tmpQueue
             Iterator itr=queue.iterator();
             while(itr.hasNext()){
@@ -318,10 +291,5 @@ public class DefaultPriorityQueue implements IQueue {
             queueLock.unlock();
         }
         return result;
-    }
-
-    public void updatePoolSize(int maximumPoolSize){
-        this.pool.setCorePoolSize(maximumPoolSize);
-        this.pool.setMaximumPoolSize(maximumPoolSize);
     }
 }
